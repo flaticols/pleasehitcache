@@ -48,7 +48,7 @@ type ContainsSlice struct { // want `struct 'ContainsSlice'`
 }
 
 // Both slice element AND has mutex - anti-pattern should win
-type SliceAndMutex struct { // want `padding NOT recommended`
+type SliceAndMutex struct { // want `slice element`
 	mu    sync.Mutex
 	value int64
 }
@@ -56,7 +56,7 @@ type SliceAndMutex struct { // want `padding NOT recommended`
 var sliceOfSliceAndMutex []SliceAndMutex
 
 // Both embedded AND has atomic - anti-pattern should win
-type EmbeddedAndAtomic struct { // want `padding NOT recommended`
+type EmbeddedAndAtomic struct { // want `embedded in another struct`
 	counter atomic.Int64
 }
 
@@ -67,7 +67,7 @@ type ContainerOfEmbedded struct {
 
 // Directive on struct that's also slice element - directive should analyze but warn
 //go:cachepad
-type DirectiveButSlice struct { // want `padding NOT recommended`
+type DirectiveButSlice struct { // want `slice element`
 	mu sync.Mutex
 }
 
