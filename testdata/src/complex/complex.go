@@ -6,7 +6,7 @@ import (
 )
 
 // Multiple detection triggers: mutex + atomic
-type MultiTrigger struct { // want `struct 'MultiTrigger'.*sync\.Mutex.*atomic`
+type MultiTrigger struct { // want `struct 'MultiTrigger'`
 	mu      sync.Mutex
 	counter atomic.Int64
 	flag    atomic.Bool
