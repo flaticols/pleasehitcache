@@ -5,13 +5,13 @@ import (
 	"runtime"
 	"strconv"
 
+	ianalysis "github.com/flaticols/pleasehitcache/internal/analysis"
+	"github.com/flaticols/pleasehitcache/internal/analysis/cachepad"
+	"github.com/flaticols/pleasehitcache/internal/analysis/shardedcounter"
 	"github.com/flaticols/pleasehitcache/internal/antipattern"
 	"github.com/flaticols/pleasehitcache/internal/detection"
 	"github.com/flaticols/pleasehitcache/internal/hotpath"
 	"github.com/flaticols/pleasehitcache/internal/layout"
-	"github.com/flaticols/pleasehitcache/internal/output"
-	"github.com/flaticols/pleasehitcache/internal/recommendation"
-	itypes "github.com/flaticols/pleasehitcache/internal/types"
 	"golang.org/x/tools/go/analysis"
 )
 
@@ -105,16 +105,37 @@ func run(pass *analysis.Pass) (any, error) {
 		calculator.Calculate(info)
 	}
 
-	// Phase 6: Generate recommendations and report
-	engine := recommendation.New(calculator, HotPathThreshold)
+	// Phase 6: Build analyzer chain and run
+	chain := ianalysis.NewChain(
+		cachepad.New(HotPathThreshold, analyzeAll),
+		shardedcounter.New(),
+	)
 
-	for _, info := range structs {
-		if !engine.ShouldAnalyze(info, analyzeAll) {
-			continue
+	// Create analysis context
+	ctx := &ianalysis.Context{
+		Pass:          pass,
+		Structs:       structs,
+		CacheLineSize: cacheLineSize,
+	}
+
+	// Run all analyzers
+	findings := chain.Run(ctx)
+
+	// Report findings as diagnostics
+	for _, finding := range findings {
+		diagnostic := analysis.Diagnostic{
+			Pos:     finding.Pos,
+			End:     finding.End,
+			Message: finding.Message,
 		}
 
-		rec := engine.Generate(info)
-		reportDiagnostic(pass, info, rec)
+		if finding.FixFunc != nil {
+			if fix := finding.FixFunc(); fix != nil {
+				diagnostic.SuggestedFixes = []analysis.SuggestedFix{*fix}
+			}
+		}
+
+		pass.Report(diagnostic)
 	}
 
 	return nil, nil
@@ -145,24 +166,3 @@ func getCacheLineSize() int64 {
 	return 64
 }
 
-func reportDiagnostic(pass *analysis.Pass, info *itypes.StructInfo, rec *itypes.Recommendation) {
-	// JSON output
-	if outputFormat == outputJSON {
-		output.PrintJSON(pass, info, rec)
-	}
-
-	// Create diagnostic
-	message := output.FormatText(info, rec)
-	diagnostic := analysis.Diagnostic{
-		Pos:     info.Pos,
-		End:     info.TypeSpec.End(),
-		Message: message,
-	}
-
-	// Add suggested fix
-	if fix := output.CreatePaddingFix(info, rec); fix != nil {
-		diagnostic.SuggestedFixes = []analysis.SuggestedFix{*fix}
-	}
-
-	pass.Report(diagnostic)
-}

@@ -3,7 +3,7 @@ package slice
 import "sync"
 
 // Should warn against padding because it's used as slice element
-type SliceItem struct { // want `padding NOT recommended`
+type SliceItem struct { // want `slice element`
 	mu    sync.Mutex
 	value int64
 }

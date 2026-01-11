@@ -1,11 +1,16 @@
 # pleasehitcache
 
-A Go static analyzer for cache line optimization. Detects structs that may benefit from cache line padding to prevent false sharing, and warns against inappropriate padding.
+A Go static analyzer for cache line optimization. Detects structs that may benefit from cache line padding to prevent false sharing, and identifies high-contention atomic counters that would benefit from sharding.
 
 ## Installation
 
 ```bash
 go install github.com/flaticols/pleasehitcache@latest
+```
+
+Or via Homebrew:
+```bash
+brew install flaticols/apps/pleasehitcache
 ```
 
 ## Usage
@@ -32,6 +37,18 @@ pleasehitcache -fix ./...
 
 # Ignore patterns
 pleasehitcache -ignore="*Test,internal/*" ./...
+```
+
+## GitHub Action
+
+Use in your CI pipeline:
+
+```yaml
+- uses: flaticols/pleasehitcache@latest
+  with:
+    path: './...'
+    # cache-line-size: '64'  # optional
+    # analyze-all: 'true'    # optional
 ```
 
 ### go vet integration
@@ -64,6 +81,78 @@ linters:
     - cachepad
 ```
 
+## Analyzers
+
+### 1. Cache Line Padding (`cachepad`)
+
+Detects structs that would benefit from padding to prevent false sharing.
+
+**Suggests padding when:**
+- False sharing risk detected (concurrent access patterns)
+- Struct fits in cache line with reasonable padding
+- Padding wouldn't more than double struct size
+
+**Warns against padding when:**
+- Struct is used as slice element (padding multiplies memory)
+- Struct is embedded in another struct
+- Struct already exceeds cache line size
+
+### 2. Sharded Counter Detection (`shardedcounter`)
+
+Detects atomic counters accessed from multiple goroutines that would benefit from sharding to reduce contention.
+
+**Problem:** Single atomic counter with many goroutines writing causes cache line contention.
+
+**Solution:** Per-goroutine/sharded counters, sum on read:
+
+```go
+// Bad: contention on writes
+type Counter struct {
+    value atomic.Int64
+}
+
+// Good: no write contention
+type ShardedCounter struct {
+    shards [NumShards]struct {
+        value atomic.Int64
+        _     [56]byte // padding
+    }
+}
+
+func (c *ShardedCounter) Add(delta int64) {
+    id := getShardID()
+    c.shards[id].value.Add(delta)
+}
+
+func (c *ShardedCounter) Load() int64 {
+    var total int64
+    for i := range c.shards {
+        total += c.shards[i].value.Load()
+    }
+    return total
+}
+```
+
+## Hot Path Detection
+
+The analyzer uses multiple methods to identify performance-critical structs:
+
+| Method | Score | Description |
+|--------|-------|-------------|
+| `//go:cachepad` directive | 100 | Explicit marking |
+| pprof hot function | 90 | Runtime profiling data |
+| Benchmark function | 85 | Used in `Benchmark*` with `b.N` |
+| HTTP handler | 80 | Request-per-second paths |
+| Nested loop | 75 | O(n²) or worse iteration |
+| Goroutine access | 70 | Concurrent access pattern |
+| Channel operation | 65 | Often in hot paths |
+| Simple loop | 60 | O(n) iteration |
+| sync.Pool usage | 55 | Allocation optimization |
+| sync.Mutex field | 50 | Concurrent access likely |
+| atomic field | 50 | Concurrent access |
+
+**Threshold:** Structs with score >= 50 are analyzed.
+
 ## Detection Methods
 
 ### 1. Directive (explicit)
@@ -78,28 +167,21 @@ type Counter struct {
 }
 ```
 
-### 2. Heuristics (automatic)
+### 2. AST-based Heuristics (automatic)
 
-The analyzer detects structs with:
+The analyzer walks the AST to detect:
 - `sync.Mutex` or `sync.RWMutex` fields
-- `atomic.*` typed fields (`atomic.Int64`, `atomic.Bool`, etc.)
+- `atomic.*` typed fields
 - Usage in `sync.Pool`
+- Access in loops (for, range)
+- Access in goroutines
+- Usage in HTTP handlers
+- Usage in benchmark functions
+- Channel operations
 
 ### 3. pprof hot paths
 
 Use `-pprof=cpu.prof` to prioritize structs appearing in hot paths from actual profiling data.
-
-## Recommendations
-
-### Suggests padding when:
-- False sharing risk detected (concurrent access patterns)
-- Struct fits in cache line with reasonable padding
-- Padding wouldn't more than double struct size
-
-### Warns against padding when:
-- Struct is used as slice element (padding multiplies memory)
-- Struct is embedded in another struct
-- Struct already exceeds cache line size
 
 ## Cache Line Sizes
 
@@ -114,15 +196,25 @@ Auto-detected from `GOARCH`/`GOOS` or override with `-cache-line-size`.
 ## Example Output
 
 ```
-counter.go:15:6: struct 'Counter' should add 32-byte padding for cache line alignment [detected via: sync.Mutex]
+counter.go:15:6: struct 'Counter' should add 32-byte padding for cache line alignment
+    Hot path score: 70/100
+    Detected via:
+      - sync.Mutex field (sync.Mutex field)
+      - goroutine access (captured in goroutine closure)
     Size: 32 bytes, Cache line: 64 bytes
     Layout:
         mu           sync.Mutex             0- 24 (24 bytes)
         value        int64                 24- 32 (8 bytes)
-    Fix: add `_ [32]byte` padding field
+    Recommendation: add `_ [32]byte` padding field
 
-items.go:28:6: struct 'Item' - padding NOT recommended: struct is used as slice element [detected via: sync.Mutex]
-    Size: 16 bytes, Cache line: 64 bytes
+stats.go:8:6: atomic counter 'Stats.requests' has high contention risk
+    Detected access from 3 goroutine(s) + loop access
+    Access locations:
+      - goroutine at worker.go:42
+      - goroutine at handler.go:18
+      - loop at process.go:55
+
+    Suggestion: Use sharded counter pattern...
 ```
 
 ## Flags
@@ -135,3 +227,23 @@ items.go:28:6: struct 'Item' - padding NOT recommended: struct is used as slice 
 | `-output` | `text` | Output format: `text` or `json` |
 | `-ignore` | | Comma-separated patterns to ignore |
 | `-fix` | `false` | Auto-fix by adding padding fields |
+
+## Architecture
+
+```
+internal/
+├── analysis/              # Pluggable analyzer framework
+│   ├── analysis.go        # Analyzer interface and Chain
+│   ├── cachepad/          # Cache line padding analyzer
+│   └── shardedcounter/    # Sharded counter detector
+├── detection/             # Struct discovery
+├── hotpath/               # AST-based hot path detection
+├── layout/                # Struct size/alignment calculation
+├── antipattern/           # Anti-pattern detection
+├── recommendation/        # Recommendation engine
+└── output/                # Text/JSON formatting
+```
+
+## License
+
+MIT

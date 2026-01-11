@@ -44,6 +44,11 @@ func TestHotPathDetection(t *testing.T) {
 	analysistest.Run(t, testdata, Analyzer, "hotpath")
 }
 
+func TestShardedCounterDetection(t *testing.T) {
+	testdata := analysistest.TestData()
+	analysistest.Run(t, testdata, Analyzer, "shardedcounter")
+}
+
 func TestCacheLineSize(t *testing.T) {
 	tests := []struct {
 		goarch   string
