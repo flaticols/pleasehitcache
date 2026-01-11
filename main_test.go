@@ -39,6 +39,11 @@ func TestEmbeddedAntiPattern(t *testing.T) {
 	analysistest.Run(t, testdata, Analyzer, "embedded")
 }
 
+func TestHotPathDetection(t *testing.T) {
+	testdata := analysistest.TestData()
+	analysistest.Run(t, testdata, Analyzer, "hotpath")
+}
+
 func TestCacheLineSize(t *testing.T) {
 	tests := []struct {
 		goarch   string
