@@ -114,12 +114,17 @@ Use -cache-line-size to specify target architecture cache line size.`,
 	Run: run,
 }
 
+const (
+	outputText = "text"
+	outputJSON = "json"
+)
+
 // Flags
 var (
 	cacheLineSizeFlag string
 	pprofPath         string
-	allStructs        bool
-	jsonOutput        bool
+	analyzeAll        bool
+	outputFormat      string
 	ignorePatterns    string
 )
 
@@ -128,10 +133,10 @@ func init() {
 		"cache line size: 'auto' (detect from GOARCH), '64', or '128'")
 	Analyzer.Flags.StringVar(&pprofPath, "pprof", "",
 		"path to CPU/memory profile for hot path detection")
-	Analyzer.Flags.BoolVar(&allStructs, "all", false,
+	Analyzer.Flags.BoolVar(&analyzeAll, "analyze-all", false,
 		"analyze all structs, not just those with heuristic detection or directive")
-	Analyzer.Flags.BoolVar(&jsonOutput, "json", false,
-		"output in JSON format for CI integration")
+	Analyzer.Flags.StringVar(&outputFormat, "output", outputText,
+		"output format: 'text' (default) or 'json' (golangci-lint compatible)")
 	Analyzer.Flags.StringVar(&ignorePatterns, "ignore", "",
 		"comma-separated patterns to ignore")
 }
@@ -481,7 +486,7 @@ func checkEmbedded(pass *analysis.Pass, field *ast.Field, structs map[string]*St
 }
 
 func shouldAnalyze(info *StructInfo) bool {
-	if allStructs {
+	if analyzeAll {
 		return true
 	}
 	return info.HasDirective || info.HasMutex || info.HasAtomicField ||
@@ -622,7 +627,7 @@ func reportDiagnostic(pass *analysis.Pass, info *StructInfo, rec Recommendation,
 		message += fmt.Sprintf(" [detected via: %s]", strings.Join(detections, ", "))
 	}
 
-	if jsonOutput {
+	if outputFormat == outputJSON {
 		action := "none"
 		switch rec.Action {
 		case ActionPad:
