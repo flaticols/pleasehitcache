@@ -101,3 +101,119 @@ func TestIgnorePatterns(t *testing.T) {
 		})
 	}
 }
+
+func TestEdgeCases(t *testing.T) {
+	testdata := analysistest.TestData()
+	analysistest.Run(t, testdata, Analyzer, "edge")
+}
+
+func TestComplexCases(t *testing.T) {
+	testdata := analysistest.TestData()
+	analysistest.Run(t, testdata, Analyzer, "complex")
+}
+
+func TestFixSuggestions(t *testing.T) {
+	// Use 64-byte cache line for predictable fix suggestions
+	cacheLineSizeFlag = "64"
+	defer func() { cacheLineSizeFlag = "auto" }()
+
+	testdata := analysistest.TestData()
+	analysistest.Run(t, testdata, Analyzer, "fix")
+}
+
+func TestMultiArchBehavior(t *testing.T) {
+	testdata := analysistest.TestData()
+
+	// Test with 64-byte cache line
+	t.Run("64-byte cache line", func(t *testing.T) {
+		cacheLineSizeFlag = "64"
+		defer func() { cacheLineSizeFlag = "auto" }()
+		analysistest.Run(t, testdata, Analyzer, "mutex")
+	})
+
+	// Test with 128-byte cache line
+	t.Run("128-byte cache line", func(t *testing.T) {
+		cacheLineSizeFlag = "128"
+		defer func() { cacheLineSizeFlag = "auto" }()
+		analysistest.Run(t, testdata, Analyzer, "mutex")
+	})
+}
+
+func TestRecommendationLogic(t *testing.T) {
+	tests := []struct {
+		name          string
+		size          int64
+		cacheLineSize int64
+		isSlice       bool
+		isEmbedded    bool
+		wantAction    ActionType
+	}{
+		{
+			name:          "good padding candidate",
+			size:          48,
+			cacheLineSize: 64,
+			wantAction:    ActionPad,
+		},
+		{
+			name:          "padding too large (>100% increase)",
+			size:          16,
+			cacheLineSize: 64,
+			wantAction:    ActionWarn,
+		},
+		{
+			name:          "exceeds cache line",
+			size:          128,
+			cacheLineSize: 64,
+			wantAction:    ActionNoPad,
+		},
+		{
+			name:          "exact cache line size",
+			size:          64,
+			cacheLineSize: 64,
+			wantAction:    ActionNoPad,
+		},
+		{
+			name:          "slice element anti-pattern",
+			size:          32,
+			cacheLineSize: 64,
+			isSlice:       true,
+			wantAction:    ActionNoPad,
+		},
+		{
+			name:          "embedded anti-pattern",
+			size:          32,
+			cacheLineSize: 64,
+			isEmbedded:    true,
+			wantAction:    ActionNoPad,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			info := &StructInfo{
+				Size:           tc.size,
+				IsSliceElement: tc.isSlice,
+				IsEmbedded:     tc.isEmbedded,
+			}
+
+			rec := generateRecommendation(info, tc.cacheLineSize)
+			if rec.Action != tc.wantAction {
+				t.Errorf("generateRecommendation() = %v, want %v", rec.Action, tc.wantAction)
+			}
+		})
+	}
+}
+
+func TestFieldDetection(t *testing.T) {
+	// These are unit tests for detection functions
+	// Real struct types would be tested via analysistest
+
+	t.Run("matchesIgnorePattern with spaces", func(t *testing.T) {
+		ignorePatterns = "Foo, Bar, Baz"
+		defer func() { ignorePatterns = "" }()
+
+		if !matchesIgnorePattern("Bar") {
+			t.Error("should match 'Bar' with spaces in pattern")
+		}
+	})
+}
